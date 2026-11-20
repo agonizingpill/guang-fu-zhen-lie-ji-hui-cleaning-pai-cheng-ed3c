@@ -4,7 +4,7 @@ from src.database import Base,engine,Session
 from src.models import User,ArrayBlock,SoilingSurvey,WashMission
 from src.revisit_models import WaterDelivery,FollowupSurvey
 from src.auth import hash_password
-from src.operations_models import WashCrew
+from src.operations_models import WashCrew,WasteManifest
 
 def seed():
     Base.metadata.create_all(engine)
@@ -35,5 +35,11 @@ def seed():
             db.add(mission);db.flush()
         if not db.scalar(select(FollowupSurvey).where(FollowupSurvey.mission_id==mission.id,FollowupSurvey.days_after==2)):
             db.add(FollowupSurvey(mission_id=mission.id,days_after=2,irradiance=800,observed_kw=61,normalized_kw=61,normalized_loss=100/62,state='stable',baseline_snapshot={'post_kw':62,'post_irradiance':800,'accepted_at':mission.accepted_at.isoformat(),'block_id':block.id,'block_code':block.code,'survey_id':historical.id,'survey_code':historical.code,'threshold_pct':5}))
+        # V4: the historical wash produced two wastewater manifests; the first is
+        # verified and ready to load, the second still waits for supervisor check.
+        if not db.scalar(select(WasteManifest).where(WasteManifest.manifest_no=='WW-DEMO-01')):
+            db.add(WasteManifest(mission_id=mission.id,manifest_no='WW-DEMO-01',station='北岭接收站',declared_liters=60,verified_liters=60,state='verified',verified_by='admin@qingling.test',created_by='planner@qingling.test'))
+        if not db.scalar(select(WasteManifest).where(WasteManifest.manifest_no=='WW-DEMO-02')):
+            db.add(WasteManifest(mission_id=mission.id,manifest_no='WW-DEMO-02',station='西坡接收站',declared_liters=40,state='declared',created_by='planner@qingling.test'))
         db.commit();print({key:db.scalar(select(func.count()).select_from(model)) for key,model in [('users',User),('blocks',ArrayBlock),('surveys',SoilingSurvey)]})
 if __name__=='__main__':seed()

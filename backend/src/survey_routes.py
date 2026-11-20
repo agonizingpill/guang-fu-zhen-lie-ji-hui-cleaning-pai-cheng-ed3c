@@ -8,6 +8,7 @@ from .models import SoilingSurvey
 from .schemas import SurveyInput
 from .field_service import record_survey,queue_assessment,require
 from .power_model import train_reference
+from .waste_model import train_reference as weigh_reference
 queue=redis.Redis.from_url(os.getenv('REDIS_URL','redis://redis:6379/0'),decode_responses=True)
 router=APIRouter()
 @router.get('/surveys')
@@ -20,3 +21,7 @@ def record(body:SurveyInput,user=Depends(editor),db=Depends(session)):return rec
 def assess(key:int,user=Depends(editor),db=Depends(session)):return queue_assessment(db,key,user,queue)
 @router.get('/power-reference')
 def evidence(user=Depends(current)):return train_reference()[1]
+@router.get('/weigh-reference')
+def weigh_evidence(user=Depends(current)):
+    model,evidence=weigh_reference()
+    return evidence

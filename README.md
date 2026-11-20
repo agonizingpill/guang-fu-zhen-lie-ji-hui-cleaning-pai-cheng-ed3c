@@ -96,13 +96,33 @@ MIT，见LICENSE。
 保留原6页，增加班组作业许可、废水去向交接、节水合同结算3页，共9个业务页面。
 
 - 班组具有日分钟容量与启用状态。计划员给草稿任务申请许可，主管核阵风≤10m/s、隔离完成及日容量后签发；新派工必须消费已签许可，既有accepted任务无需补证。draft许可可修订风速、隔离、日期及工时；签发后冻结，派工前主管可撤销释放容量，撤销为终态。
-- 废水绑定已验收任务，使用原任务水量快照，回收不得超用水；回收率不足70%主管核验前须有至少5字原因。recorded阶段可补正数量和原因，核验后冻结；现场签收人和接收凭证齐全才能交接，重复交接拒绝。
-- 结算只能引用已验收且已交接废水的任务。收入=验收增益kW×合同单价，水成本=任务用水L×每升成本，毛利自动计算；负毛利须说明，主管签结冻结。保存阵列、巡测、验收增益、水量及废水接收凭据快照，仅生成本地合同凭据。
+- V4 起重构为“联单→车次→装车”台账：已验收任务可登记多张废水联单（`WasteManifest`，manifest_no唯一），同任务各联单申报量合并不超过任务用水；主管按联单核验数量（verified_liters≤申报量），核验后冻结且已有装车不可再改。一张联单可跨多个车次分趟装车（`TripLoad`，车次+联单唯一），在途/拒收未清退的装车量继续占用核验余量，并发装车不会突破核定总量。
+- 接收站只给整车磅单（`WeighTrip`）。`backend/fixtures/weigh_reference.json` 为固定 seed 2026 的 271 张历史磅单（24 台车）与对应实收升数；净收水量模型以毛重、皮重、气温、运距、罐容为特征，按车辆留出（leave-one-vehicle-out）验证每台车的独立 MAE/MAPE。单车历史少于5张或留出 MAPE 超过 8%，或估算净收超过整车装车量，均拒绝估算并强制登记实测净收。模型证据（阈值、误差、SHA256）写入 `trip.estimate_evidence`。
+- 同一车次可混装多张联单，接收站签收时按车上各联单的待收余量比例分摊整车净收水，且每张联单分摊不超过其装车量；分摊合计严格等于整车净收。
+- 磅单按 weigh_ticket 幂等：同一车次重试返回原记录，不重复记收；磅单号已被其他车次使用则拒绝。拒收为整车站拒收并记录不少于5字原因；拒收水必须按联单经水点接收人签收清退回原水点（`WasteReturn`，凭证防重），清退完成前该车不得再建新装车、联单不得重装。
+- 联单“收齐”指其核定水量已全部装车，且每趟车次均已签收，或拒收后已全额清退；收齐后 state=closed。
+- 结算只能引用已验收且全部联单收齐的任务。收入=验收增益kW×合同单价，水成本=任务用水L×每升成本，毛利自动计算；负毛利须说明，主管签结冻结。保存阵列、巡测、验收增益、水量及各联单核定/实收/凭证快照，仅生成本地合同凭据。
 
-新增实体：WashCrew、WorkPermit（mission唯一）、WastewaterRecord（mission/manifest唯一）、WashSettlement（mission唯一），均有真实外键与数量约束。GET /crews /permits /wastewater /settlements供三角色查看；POST /crews及PUT /crews/{id}仅主管；POST/PUT /permits、POST/PUT /wastewater和POST /settlements允许计划员/主管；许可sign/void、废水verify、结算sign仅主管；废水handover允许计划员/主管。
+新增实体：WashCrew、WorkPermit（mission唯一）、WasteManifest、WeighTrip、TripLoad、WasteReturn、WashSettlement（mission唯一），均有真实外键与数量约束。GET /crews /permits /waste-manifests /waste-trips /waste-loads /waste-returns /settlements供三角色查看；POST /crews及PUT /crews/{id}仅主管；许可、联单、车次、装车、过磅、签收、拒收、清退与结算编制允许计划员/主管；许可sign/void、联单verify、结算sign仅主管。
 
 容量签发按Mission→Permit→Crew加锁，锁读刷新Session缓存；MySQL事务使用READ COMMITTED，Crew行锁内计算已提交signed/used占用量，避免等待前建立的旧快照。派工许可消费与原水量扣减同事务，失败整笔回滚。种子只缺失时新增CREW-SOUTH/CREW-RIDGE，保留人工编辑和历史签结。
 
 新增代码按实体、输入约束、路由、许可/废水/结算职责及3个页面组织。历史v1与expansion证据保留，第三轮证据在test-artifacts/gb-1024/v3/。作业许可按日容量预留，不模拟逐分钟班次；本地废水联单不接环保系统，合同凭据不触发收付款。
 
 V3 已知范围补充：每任务一张作业许可；撤销为终止办理，需重新创建任务，当前不支持同任务重办许可。草稿许可可在签发前修订；撤销会释放班组容量。
+
+## 第四轮扩展：混装废水联单、整车磅单与净收估算
+
+上游现实：几块阵列的废水常混装一车，接收站只给整车磅单。系统以历史磅单+实收量训练净收水量估算，按车辆留出验证；误差过大或该车历史不足时拒绝估算、要求补实测。
+
+- **估算与验证**：`backend/src/waste_model.py`，RandomForestRegressor 120树、max_depth 12、random_state 42；特征 gross_kg / tare_kg / ambient_temp_c / haul_km / tank_capacity_l，target received_liters。验证不是随机切分，而是逐车留出：每台车的磅单都由“其余全部车辆”训练出的森林预测，单车留出 MAPE>8% 或历史<5趟即标记须实测。`GET /power-reference` 之外的证据接口为 `GET /weigh-reference`。
+- **装车并发约束**：装车余量 = 核定水量 − 已签收 − 在途/未清退装车量。即使同张联单已被多辆车装走，合计也超不过核验量。
+- **分摊**：签收时整车净收按车上各联单“核定−实收”余额比例分摊，单张联单分摊不超过其装车量；分摊合计与磅单净收一致，尾差补到余额最大的一张。
+- **幂等与去重**：weigh_ticket 全局唯一；同车次同磅单重试返回既有记录，不二次记收。同车次同一联单只允许一条装车记录。
+- **拒收与重装**：整车站拒收记录原因；退水按联单经水点接收人签收登记去向与回执，回执号防重；清退未完成前该车首段装车会被拒绝，清退额回到原联单核验余量，可重新装车。
+- **退回与损耗分开**：装车量−分摊实收为途中损耗，拒收未清退量单独计数并阻止结算，二者不互相抵扣。
+- **结算门禁**：所有联单已核验、已收齐（每趟签收或全额清退）、无未清退拒收水，才可编制结算。
+
+接口：`GET/POST /waste-manifests`、`POST /waste-manifests/{id}/verify`、`GET/POST /waste-trips`、`POST /waste-trips/{id}/loads`、`POST /waste-trips/{id}/weigh`、`POST /waste-trips/{id}/receive`、`POST /waste-trips/{id}/reject`、`POST /waste-trips/{id}/returns`、`GET /waste-loads`、`GET /waste-returns`。演示 seed 增加 WW-DEMO-01（已核验待装车）与 WW-DEMO-02（待核验）。
+
+**V4 已知范围**：混装车若被拒收，清退须按联单分别登记（退水量各自回到原联单/水点）；不建模单张联单跨接收站分批签收后的部分退回；磅单净收估算为本地模型，不替代计量级流量计。

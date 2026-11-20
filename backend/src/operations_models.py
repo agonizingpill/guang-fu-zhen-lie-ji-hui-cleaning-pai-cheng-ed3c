@@ -1,5 +1,5 @@
 from datetime import date,datetime
-from sqlalchemy import String,Float,ForeignKey,JSON,CheckConstraint,Date,DateTime,func
+from sqlalchemy import String,Float,ForeignKey,JSON,CheckConstraint,Date,DateTime,UniqueConstraint,func
 from sqlalchemy.orm import Mapped,mapped_column
 from .database import Base
 class WashCrew(Base):
@@ -21,21 +21,69 @@ class WorkPermit(Base):
     isolation:Mapped[bool]=mapped_column()
     state:Mapped[str]=mapped_column(String(24),default='draft')
     signed_by:Mapped[str]=mapped_column(String(120),default='')
-class WastewaterRecord(Base):
-    __tablename__='wastewater_records'
-    __table_args__=(CheckConstraint('recovered_liters>=0 AND recovered_liters<=used_liters AND used_liters>0'),)
+class WasteManifest(Base):
+    __tablename__='waste_manifests'
+    __table_args__=(CheckConstraint('declared_liters>0 AND verified_liters>=0 AND verified_liters<=declared_liters AND received_liters>=0 AND received_liters<=verified_liters'),)
     id:Mapped[int]=mapped_column(primary_key=True)
-    mission_id:Mapped[int]=mapped_column(ForeignKey('wash_missions.id'),unique=True)
-    used_liters:Mapped[float]=mapped_column(Float)
-    recovered_liters:Mapped[float]=mapped_column(Float)
-    recovery_pct:Mapped[float]=mapped_column(Float)
-    disposal_method:Mapped[str]=mapped_column(String(160))
-    low_recovery_reason:Mapped[str]=mapped_column(String(400),default='')
-    manifest:Mapped[str]=mapped_column(String(80),unique=True)
-    state:Mapped[str]=mapped_column(String(24),default='recorded')
+    mission_id:Mapped[int]=mapped_column(ForeignKey('wash_missions.id'))
+    manifest_no:Mapped[str]=mapped_column(String(80),unique=True)
+    station:Mapped[str]=mapped_column(String(80))
+    declared_liters:Mapped[float]=mapped_column(Float)
+    verified_liters:Mapped[float]=mapped_column(Float,default=0)
+    received_liters:Mapped[float]=mapped_column(Float,default=0)
+    state:Mapped[str]=mapped_column(String(24),default='declared')
     verified_by:Mapped[str]=mapped_column(String(120),default='')
     received_by:Mapped[str]=mapped_column(String(120),default='')
     receipt:Mapped[str]=mapped_column(String(200),default='')
+    received_at:Mapped[datetime|None]=mapped_column(DateTime,nullable=True)
+    created_by:Mapped[str]=mapped_column(String(120),default='')
+class WeighTrip(Base):
+    __tablename__='weigh_trips'
+    __table_args__=(CheckConstraint('gross_kg>=0 AND tare_kg>=0 AND ambient_temp_c>=-50 AND ambient_temp_c<=70 AND haul_km>=0 AND tank_capacity_l>=0'),)
+    id:Mapped[int]=mapped_column(primary_key=True)
+    trip_code:Mapped[str]=mapped_column(String(50),unique=True)
+    vehicle_code:Mapped[str]=mapped_column(String(40))
+    station:Mapped[str]=mapped_column(String(80))
+    weigh_ticket:Mapped[str|None]=mapped_column(String(60),unique=True,nullable=True)
+    gross_kg:Mapped[float]=mapped_column(Float,default=0)
+    tare_kg:Mapped[float]=mapped_column(Float,default=0)
+    ambient_temp_c:Mapped[float]=mapped_column(Float,default=20)
+    haul_km:Mapped[float]=mapped_column(Float,default=0)
+    tank_capacity_l:Mapped[float]=mapped_column(Float,default=0)
+    estimated_net_liters:Mapped[float|None]=mapped_column(Float,nullable=True)
+    measured_net_liters:Mapped[float|None]=mapped_column(Float,nullable=True)
+    net_liters:Mapped[float|None]=mapped_column(Float,nullable=True)
+    estimate_evidence:Mapped[dict|None]=mapped_column(JSON,nullable=True)
+    state:Mapped[str]=mapped_column(String(24),default='loading')
+    reject_reason:Mapped[str]=mapped_column(String(400),default='')
+    received_by:Mapped[str]=mapped_column(String(120),default='')
+    receipt:Mapped[str]=mapped_column(String(200),default='')
+    weighed_by:Mapped[str]=mapped_column(String(120),default='')
+    weighed_at:Mapped[datetime|None]=mapped_column(DateTime,nullable=True)
+    created_by:Mapped[str]=mapped_column(String(120),default='')
+    created_at:Mapped[datetime]=mapped_column(DateTime,server_default=func.now())
+class TripLoad(Base):
+    __tablename__='trip_loads'
+    __table_args__=(CheckConstraint('loaded_liters>0 AND allocated_liters>=0 AND allocated_liters<=loaded_liters'),UniqueConstraint('trip_id','manifest_id'))
+    id:Mapped[int]=mapped_column(primary_key=True)
+    trip_id:Mapped[int]=mapped_column(ForeignKey('weigh_trips.id'))
+    manifest_id:Mapped[int]=mapped_column(ForeignKey('waste_manifests.id'))
+    loaded_liters:Mapped[float]=mapped_column(Float)
+    allocated_liters:Mapped[float]=mapped_column(Float,default=0)
+    state:Mapped[str]=mapped_column(String(24),default='loaded')
+class WasteReturn(Base):
+    __tablename__='waste_returns'
+    __table_args__=(CheckConstraint('liters>0'),)
+    id:Mapped[int]=mapped_column(primary_key=True)
+    manifest_id:Mapped[int]=mapped_column(ForeignKey('waste_manifests.id'))
+    trip_id:Mapped[int|None]=mapped_column(ForeignKey('weigh_trips.id'),nullable=True)
+    liters:Mapped[float]=mapped_column(Float)
+    destination:Mapped[str]=mapped_column(String(160))
+    received_by:Mapped[str]=mapped_column(String(120))
+    receipt:Mapped[str]=mapped_column(String(200))
+    reason:Mapped[str]=mapped_column(String(400),default='')
+    created_by:Mapped[str]=mapped_column(String(120),default='')
+    created_at:Mapped[datetime]=mapped_column(DateTime,server_default=func.now())
 class WashSettlement(Base):
     __tablename__='wash_settlements'
     __table_args__=(CheckConstraint('price_per_kw>0 AND cost_per_liter>=0'),)
